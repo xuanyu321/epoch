@@ -16,7 +16,7 @@ SRC_EXECUTABLES = $(subst priv/bin, c_src/src, $(EXECUTABLES))
 SRC_LIBBLAKE = $(subst priv/lib, c_src/src, $(LIBBLAKE))
 
 REPO = https://github.com/aeternity/cuckoo.git
-COMMIT = fddbf60
+COMMIT = 3a8a321b7107409a165f22974977dc95498cbcd5
 
 .PHONY: all
 all: $(LIBBLAKE) $(EXECUTABLES)
