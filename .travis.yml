@@ -31,7 +31,7 @@ deploy:
     on:
       # See https://docs.travis-ci.com/user/deployment#Conditional-Releases-with-on%3A
       repo: aeternity/epoch
-      branch: master
+      branch: PT-152968563-no-stale-miner-preventing-mining
       condition: "${JOB:?} = package && ${TRAVIS_OS_NAME:?} = linux"
   - provider: script
     script: ./ci deploy "${JOB:?}" "${TRAVIS_BUILD_DIR:?}" uat
