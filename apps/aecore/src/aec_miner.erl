@@ -16,7 +16,8 @@
          resume/0,
          suspend/0,
          get_balance/0,
-         post_block/1
+         post_block/1, post_block/2,
+         get_missing_blocks/0
         ]).
 -ifdef(TEST).
 -export([miner_from_data/1]).
@@ -34,9 +35,13 @@
          code_change/4,
          callback_mode/0]).
 
+-export_type([options/0]).
+
 -include("common.hrl").
 -include("blocks.hrl").
 
+-type(option()  :: {atom(), any()}).
+-type(options() :: [option()]).
 
 -define(SERVER, ?MODULE).
 
@@ -108,12 +113,23 @@ get_balance() ->
 %%------------------------------------------------------------------------------
 -spec post_block(block()) -> ok.
 post_block(Block) ->
-    gen_statem:cast(?SERVER, {post_block, Block}).
+    post_block(Block, [{publish_event, block_received}]).
+
+-spec post_block(block(), options()) -> ok.
+post_block(Block, Options) ->
+    gen_statem:cast(?SERVER, {post_block, Block, Options}).
 
 -ifdef(TEST).
 miner_from_data(State) ->
     State#state.miner.
 -endif.
+
+%%------------------------------------------------------------------------------
+%% Post a block
+%%------------------------------------------------------------------------------
+-spec get_missing_blocks() -> [block_header_hash()].
+get_missing_blocks() ->
+    [].
 
 %%%===================================================================
 %%% gen_statem callbacks
@@ -234,8 +250,8 @@ idle({call, From}, _Msg, State) ->
 
 %% Casts: post_block | miner_done | create_block_candidate |
 %%        bump_initial_cycle_nonce | mine | check_keys
-idle(cast, {post_block, Block}, State) ->
-    idle_post_block(Block, State);
+idle(cast, {post_block, Block, Opts}, State) ->
+    idle_post_block(Block, Opts, State);
 idle(cast, {miner_done, Miner}, #state{ miner = Miner } = State) ->
     {keep_state, State#state{ miner = none }};
 idle(cast, {miner_done, Miner}, #state{ miner = OtherMiner } = State) ->
@@ -270,8 +286,8 @@ configure({call, From}, suspend, State) ->
 
 %% Casts: post_block | miner_done | create_block_candidate |
 %%        bump_initial_cycle_nonce | mine | check_keys
-configure(cast, {post_block, Block}, State) ->
-    configure_post_block(Block, State);
+configure(cast, {post_block, Block, Opts}, State) ->
+    configure_post_block(Block, Opts, State);
 configure(cast, {miner_done, Miner}, #state{ miner = Miner } = State) ->
     %% The current miner is done. Rmove it from the state.
     {keep_state, State#state{ miner = none }};
@@ -387,8 +403,8 @@ running({call, From}, suspend, State) ->
 
 %% Casts: post_block | miner_done | create_block_candidate |
 %%        bump_initial_cycle_nonce | mine | check_keys
-running(cast, {post_block, Block}, State) ->
-    running_post_block(Block, State);
+running(cast, {post_block, Block, Opts}, State) ->
+    running_post_block(Block, Opts, State);
 running(cast, {miner_done, Miner}, #state{ miner = Miner } = State) ->
     {next_state, configure, State#state{ miner = none }};
 running(cast, {miner_done, Miner}, #state{ miner = OtherMiner } = State) ->
@@ -430,8 +446,8 @@ waiting_for_keys({call, From}, suspend, State) ->
 
 %% Casts: post_block | miner_done | create_block_candidate |
 %%        bump_initial_cycle_nonce | mine | check_keys
-waiting_for_keys(cast, {post_block, Block}, State) ->
-    waiting_post_block(Block, State);
+waiting_for_keys(cast, {post_block, Block, Opts}, State) ->
+    waiting_post_block(Block, Opts, State);
 waiting_for_keys(cast, {miner_done, Miner}, #state{ miner = Miner } = State) ->
     {keep_state, State#state{ miner = none }};
 waiting_for_keys(cast, {miner_done, Miner},
@@ -563,8 +579,8 @@ report_suspended() ->
     epoch_mining:error("Mining suspended as no keys are avaiable for signing.", []).
 
 
-idle_post_block(Block, State) ->
-    case int_post_block(Block, State) of
+idle_post_block(Block, Opts, State) ->
+    case int_post_block(Block, Opts, State) of
         new_top ->
             start_if_auto(State),
             {next_state, idle, State};
@@ -574,8 +590,8 @@ idle_post_block(Block, State) ->
             {next_state, idle, State}
     end.
 
-configure_post_block(Block, State) ->
-    case int_post_block(Block, State) of
+configure_post_block(Block, Opts, State) ->
+    case int_post_block(Block, Opts, State) of
         new_top ->
             start_if_auto(State),
             {next_state, configure, State};
@@ -585,8 +601,8 @@ configure_post_block(Block, State) ->
             {next_state, configure, State}
     end.
 
-running_post_block(Block, State) ->
-    case int_post_block(Block, State) of
+running_post_block(Block, Opts, State) ->
+    case int_post_block(Block, Opts, State) of
         new_top ->
             start_if_auto(State),
             {next_state, configure, State};
@@ -597,12 +613,12 @@ running_post_block(Block, State) ->
             {next_state, running, State}
     end.
 
-waiting_post_block(Block, State) ->
-    int_post_block(Block, State),
+waiting_post_block(Block, Opts, State) ->
+    int_post_block(Block, Opts, State),
     {next_state, waiting_for_keys, State}.
 
--spec int_post_block(#block{}, #state{}) -> ok | new_top | error.
-int_post_block(Block,_State) ->
+-spec int_post_block(#block{}, options(), #state{}) -> ok | new_top | error.
+int_post_block(Block,Opts,_State) ->
     epoch_mining:info("write_block: ~p", [Block]),
     Header = aec_blocks:to_header(Block),
     {ok, HH} = aec_headers:hash_header(Header),
@@ -620,7 +636,7 @@ int_post_block(Block,_State) ->
                             Res = aec_chain:write_block(Block),
                             epoch_mining:debug("write_block result: ~p", [Res]),
                             %% Gossip
-                            aec_events:publish(block_received, Block),
+                            publish_event(Opts, Block),
                             maybe_update_transactions(OldTop);
 			{error, Reason} ->
                             lager:debug("Couldn't insert header (~p)", [Reason]),
@@ -634,6 +650,15 @@ int_post_block(Block,_State) ->
                     error
             end
     end.
+
+publish_event(Opts, Block) ->
+    case proplists:get_value(publish_event, Opts) of
+        undefined ->
+            ok;
+        Event ->
+            aec_events:publish(Event, Block)
+    end.
+
 
 maybe_update_transactions(OldTop) ->
     case aec_chain:top() of
