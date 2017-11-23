@@ -619,8 +619,16 @@ waiting_post_block(Block, Opts, State) ->
     {next_state, waiting_for_keys, State}.
 
 -spec int_post_block(#block{}, options(), #state{}) -> ok | new_top | error.
-int_post_block(Block,Opts,_State) ->
-    epoch_mining:info("write_block: ~p", [Block]),
+int_post_block(Block,Opts,State) ->
+    try int_post_block_(Block,Opts,State)
+    catch
+        C:E ->
+            epoch_mining:error("EXCEPTION int_post_block: ~p:~p", [C,E]),
+            error
+    end.
+
+int_post_block_(Block,Opts,_State) ->
+    epoch_mining:info("int_post_block: ~p", [Block]),
     Header = aec_blocks:to_header(Block),
     {ok, HH} = aec_headers:hash_header(Header),
     case aec_chain:get_block_by_hash(HH) of
