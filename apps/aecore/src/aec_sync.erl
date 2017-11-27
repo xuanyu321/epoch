@@ -69,12 +69,10 @@ set_subset_size(Sz) when is_integer(Sz), Sz > 0 ->
 -type ping_object() :: map().
 -spec local_ping_object() -> ping_object().
 local_ping_object() ->
-    {ok, GHdr} = aec_chain:genesis_header(),
-    {ok, GHash} = aec_headers:hash_header(GHdr),
-    {ok, TopHdr} = aec_chain:top_header(),
-    {ok, TopHash} = aec_headers:hash_header(TopHdr),
+    GHash = aec_conductor:genesis_hash(),
+    TopHash = aec_conductor:top_header_hash(),
     Source = source_uri(),
-    {ok, {Difficulty, _}} = aec_chain:get_total_difficulty(),
+    {ok, Difficulty} = aec_conductor:get_total_difficulty(),
     #{<<"genesis_hash">> => base64:encode(GHash),
       <<"best_hash">>    => base64:encode(TopHash),
       <<"difficulty">>   => Difficulty,
@@ -254,9 +252,8 @@ do_server_get_missing(PeerUri) ->
     aec_events:publish(chain_sync, {server_done, PeerUri}).
 
 genesis_hash() ->
-    {ok, GHdr} = aec_chain:genesis_header(),
-    {ok, GHash} = aec_headers:hash_header(GHdr),
-    GHash.
+    aec_conductor:genesis_hash().
+
 
 fetch_headers(PeerUri, GHash) ->
     case aeu_requests:top(PeerUri) of
@@ -275,7 +272,7 @@ fetch_headers(PeerUri, GHash) ->
     end.
 
 fetch_headers_1(HdrHash, Hdr, PeerUri, GHash, Acc) ->
-    case aec_chain:get_header_by_hash(HdrHash) of
+    case aec_conductor:get_header_by_hash(HdrHash) of
         {ok, _} ->
             %% we have a continuous header chain
             headers_fetched(PeerUri, Acc);
@@ -329,14 +326,14 @@ fetch_next_hdr(Hash, PeerUri, GHash, Acc) ->
     end.
 
 fetch_hdrs_block_recvd(HdrHash, Block, PeerUri, GHash, Acc) ->
-    case aec_chain:get_block_by_hash(HdrHash) of
-        {ok, _} ->
+    case aec_conductor:has_block(HdrHash) of
+        true ->
             lager:debug(
               "we have this block, go to next phase (~p)",
               [pp(HdrHash)]),
             %% we're done
             headers_fetched(PeerUri, Acc);
-        {error, _} ->
+        false ->
             lager:debug("new block, continue (~p)", [pp(HdrHash)]),
             Hdr = aec_blocks:to_header(Block),
             fetch_next_hdr(
